@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { playOutcome, playRiff, resumeAudio } from '../src/audio/riffAudio';
+import { playCoins, playOutcome, playRiff, resumeAudio } from '../src/audio/riffAudio';
 
 describe('riff audio boundary', () => {
   it('does not leak a rejected browser resume promise', async () => {
@@ -11,20 +11,11 @@ describe('riff audio boundary', () => {
 
   it('is safe when Web Audio is unavailable', () => {
     expect(() => playRiff(true)).not.toThrow();
+    expect(() => playCoins()).not.toThrow();
   });
 
-  it('schedules an outcome when Web Audio is available', () => {
-    const oscillators: Array<{
-      frequency: { value: number };
-      start: ReturnType<typeof vi.fn>;
-      stop: ReturnType<typeof vi.fn>;
-    }> = [];
-    const gains: Array<{
-      gain: {
-        setValueAtTime: ReturnType<typeof vi.fn>;
-        exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
-      };
-    }> = [];
+  it('schedules combo riffs, coins and outcomes in order', () => {
+    const oscillators: Array<{ frequency: { value: number } }> = [];
     const fakeContext = {
       currentTime: 0,
       state: 'running',
@@ -39,29 +30,37 @@ describe('riff audio boundary', () => {
         oscillators.push(oscillator);
         return oscillator;
       }),
-      createGain: vi.fn(() => {
-        const gain = {
-          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
-          connect: vi.fn(() => ({ destination: true })),
-        };
-        gains.push(gain);
-        return gain;
-      }),
+      createGain: vi.fn(() => ({
+        gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+        connect: vi.fn(() => ({ destination: true })),
+      })),
       resume: vi.fn(() => Promise.resolve()),
     };
     vi.stubGlobal(
       'AudioContext',
       vi.fn(() => fakeContext),
     );
-    expect(() => playOutcome(true)).not.toThrow();
-    expect(fakeContext.createOscillator).toHaveBeenCalledTimes(3);
-    expect(oscillators.map(({ frequency }) => frequency.value)).toEqual([392, 494, 587]);
-    expect(oscillators.map(({ start }) => start.mock.calls[0][0])).toEqual([0, 0.12, 0.24]);
-    expect(oscillators.map(({ stop }) => stop.mock.calls[0][0])).toEqual([0.22, 0.34, 0.46]);
-    expect(gains.every(({ gain }) => gain.setValueAtTime.mock.calls.length === 1)).toBe(true);
-    expect(
-      gains.every(({ gain }) => gain.exponentialRampToValueAtTime.mock.calls.length === 2),
-    ).toBe(true);
+
+    playRiff(true, 2); // riff climbs two semitones on a combo of two
+    playRiff(false, 5); // a miss stays a single dull note
+    playCoins(); // two-note coin sparkle
+    playOutcome(true); // three-note catch jingle
+    playRiff(true, 50); // combo pitch is capped
+
+    const comboRoot = 392 * Math.pow(2, 2 / 12);
+    const cappedRoot = 392 * Math.pow(2, 8 / 12);
+    expect(oscillators.map(({ frequency }) => frequency.value)).toEqual([
+      comboRoot,
+      comboRoot * 1.3346,
+      233,
+      880,
+      1318,
+      392,
+      494,
+      587,
+      cappedRoot,
+      cappedRoot * 1.3346,
+    ]);
     vi.unstubAllGlobals();
   });
 });

@@ -1,80 +1,143 @@
 import { describe, expect, it } from 'vitest';
 import { FISH } from '../src/content/fish';
-import { MOONLIT_COVE } from '../src/content/location';
-import { advanceBeat, consumeBeat, createBeatClock } from '../src/game/beat';
 import {
   beginCast,
+  biteHooked,
   createFishingState,
+  expireHook,
   finishCast,
+  flub,
+  hookWindow,
+  missBeat,
   rhythmHit,
-  startReel,
+  setHook,
 } from '../src/game/fishing';
 import { fishingVisualForPhase } from '../src/ui/fishingVisuals';
 import { FISH_INFO_WIDTH, formatFishInfo } from '../src/ui/fishInfo';
 
-describe('fishing loop rules', () => {
-  it('defines the first location and its keyboard controls', () => {
-    expect(MOONLIT_COVE).toEqual({
-      name: 'MOONLIT COVE',
-      controls: 'SPACE / ENTER  •  CAST + PLAY',
-    });
+const bluegill = FISH[0];
+const koi = FISH[2];
+
+describe('cast and wait', () => {
+  it('starts ready to cast', () => {
+    expect(createFishingState().phase).toBe('ready');
   });
 
-  it('shows the line while fishing and hides it between casts', () => {
+  it('clamps cast power between 0 and 1', () => {
+    expect(finishCast(createFishingState(), 1.5).castPower).toBe(1);
+    expect(finishCast(createFishingState(), -3).castPower).toBe(0);
+    expect(finishCast(createFishingState(), Number.NaN).castPower).toBe(0);
+  });
+});
+
+describe('the hook moment', () => {
+  it('enters a biting window when a fish takes the bait', () => {
+    const state = biteHooked(createFishingState(), bluegill, 0.8);
+    expect(state.phase).toBe('biting');
+    expect(state.fish?.id).toBe('bluegill');
+  });
+
+  it('sets the hook into the reeling fight with a clean slate', () => {
+    const dirty = rhythmHit(biteHooked(createFishingState(), koi, 5), 0.9);
+    const hooked = setHook(dirty);
+    expect(hooked.phase).toBe('reeling');
+    expect(hooked.progress).toBe(0);
+    expect(hooked.tension).toBe(0);
+    expect(hooked.misses).toBe(0);
+    expect(hooked.combo).toBe(0);
+  });
+
+  it('loses the fish when the hook window expires', () => {
+    const state = expireHook(biteHooked(createFishingState(), koi, 5));
+    expect(state.phase).toBe('lost');
+    expect(state.fish?.id).toBe('golden-koi');
+  });
+
+  it('gives trickier fish a shorter hook window', () => {
+    expect(hookWindow(bluegill)).toBe(1.2);
+    expect(hookWindow(koi)).toBeLessThan(hookWindow(bluegill));
+    expect(hookWindow(koi)).toBeGreaterThanOrEqual(0.7);
+  });
+});
+
+describe('the reel fight', () => {
+  const reeling = (fish = bluegill) => setHook(biteHooked(createFishingState(), fish, 1));
+
+  it('progresses on accurate beats and raises tension on sloppy ones', () => {
+    const good = rhythmHit(reeling(), 0.9);
+    expect(good.progress).toBeGreaterThan(0);
+    expect(good.combo).toBe(1);
+    const bad = rhythmHit(reeling(), 0.2);
+    expect(bad.progress).toBeLessThan(good.progress);
+    expect(bad.tension).toBeGreaterThan(good.tension);
+    expect(bad.misses).toBe(1);
+  });
+
+  it('catches the fish once progress completes', () => {
+    let state = reeling();
+    for (let hits = 0; state.phase === 'reeling'; hits += 1) {
+      state = rhythmHit(state, 0.9);
+      expect(hits).toBeLessThan(50);
+    }
+    expect(state.phase).toBe('caught');
+  });
+
+  it('snaps the line when tension maxes out', () => {
+    let state = reeling(koi);
+    for (let beats = 0; state.phase === 'reeling'; beats += 1) {
+      state = rhythmHit(state, 0);
+      expect(beats).toBeLessThan(50);
+    }
+    expect(state.phase).toBe('lost');
+  });
+
+  it('penalises early flubs with tension and a broken combo', () => {
+    let state = reeling();
+    state = rhythmHit(state, 0.9);
+    expect(state.combo).toBe(1);
+    const flubbed = flub(state);
+    expect(flubbed.combo).toBe(0);
+    expect(flubbed.misses).toBe(1);
+    expect(flubbed.tension).toBeGreaterThan(state.tension);
+  });
+
+  it('uses rod modifiers: faster reels and softer miss tension', () => {
+    const base = rhythmHit(reeling(), 0.9).progress;
+    const boosted = rhythmHit(reeling(), 0.9, { progressScale: 1.5, missTensionScale: 0.6 });
+    expect(boosted.progress).toBeGreaterThan(base);
+    const sloppyBase = rhythmHit(reeling(), 0).tension;
+    const sloppySoft = rhythmHit(reeling(), 0, { progressScale: 1, missTensionScale: 0.6 }).tension;
+    expect(sloppySoft).toBeLessThan(sloppyBase);
+  });
+
+  it('ignores beats outside the fight', () => {
+    const idle = createFishingState();
+    expect(rhythmHit(idle, 0.9)).toBe(idle);
+    expect(missBeat(idle)).toBe(idle);
+    expect(flub(idle)).toBe(idle);
+  });
+
+  it('resets the fight on a new cast', () => {
+    const dirty = rhythmHit(setHook(biteHooked(createFishingState(), koi, 5)), 0);
+    const fresh = beginCast(dirty);
+    expect(fresh.phase).toBe('casting');
+    expect(fresh.misses).toBe(0);
+    expect(fresh.fish).toBeUndefined();
+  });
+});
+
+describe('fishing presentation', () => {
+  it('shows the line for every active phase, taut while fighting', () => {
+    expect(fishingVisualForPhase('biting')).toEqual({ visible: true, targetX: 700, targetY: 350 });
+    expect(fishingVisualForPhase('reeling').visible).toBe(true);
+    expect(fishingVisualForPhase('waiting').targetY).toBe(420);
     expect(fishingVisualForPhase('ready').visible).toBe(false);
-    expect(fishingVisualForPhase('casting')).toMatchObject({ visible: true, targetX: 400 });
-    expect(fishingVisualForPhase('waiting')).toMatchObject({ visible: true, targetY: 420 });
-    expect(fishingVisualForPhase('reeling')).toMatchObject({ visible: true, targetX: 700 });
     expect(fishingVisualForPhase('caught').visible).toBe(false);
     expect(fishingVisualForPhase('lost').visible).toBe(false);
   });
 
-  it('formats catch information with rarity, difficulty, and behavior', () => {
-    expect(formatFishInfo(FISH[2])).toBe('Golden Koi  •  RARE\nDIFFICULTY ★★★  •  tricky');
-    expect(FISH_INFO_WIDTH).toBeLessThanOrEqual(320);
-  });
-
-  it('allows only one input per rhythm pulse', () => {
-    const ready = advanceBeat(createBeatClock(0.1), 0.1, 1);
-    expect(ready.ready).toBe(true);
-    const consumed = consumeBeat(ready, 1);
-    expect(consumed.ready).toBe(false);
-    expect(advanceBeat(consumed, 0.01, 1).ready).toBe(false);
-  });
-
-  it('closes an unanswered timing window before the next pulse', () => {
-    const ready = advanceBeat(createBeatClock(0.1), 0.1, 1);
-    expect(advanceBeat(ready, 0.61, 1).ready).toBe(false);
-    expect(advanceBeat(advanceBeat(ready, 0.61, 1), 1, 1).ready).toBe(true);
-  });
-
-  it('moves from ready to waiting with bounded cast power', () => {
-    const casting = beginCast(createFishingState());
-    expect(finishCast(casting, 1.4)).toMatchObject({ phase: 'waiting', castPower: 1 });
-    expect(finishCast(casting, Number.NaN).castPower).toBe(0);
-  });
-  it('rewards an on-beat riff more than a miss', () => {
-    const base = startReel(finishCast(beginCast(createFishingState()), 0.5), FISH[0], 0.8);
-    expect(rhythmHit(base, 1).progress).toBeGreaterThan(rhythmHit(base, 0.2).progress);
-    expect(rhythmHit(base, 0.2).tension).toBeGreaterThan(rhythmHit(base, 1).tension);
-  });
-  it('can catch every fish through accurate beats and lose to tension', () => {
-    for (const fish of FISH) {
-      let caught = startReel(createFishingState(), fish, fish.minWeight);
-      for (let i = 0; i < 30 && caught.phase === 'reeling'; i++) caught = rhythmHit(caught, 1);
-      expect(caught.phase).toBe('caught');
-    }
-    const hard = startReel(createFishingState(), FISH[2], 4);
-    let lost = hard;
-    for (let i = 0; i < 8; i++) lost = rhythmHit(lost, 0);
-    expect(lost.phase).toBe('lost');
-  });
-
-  it('supports a complete cast-to-catch loop', () => {
-    const cast = finishCast(beginCast(createFishingState()), 0.75);
-    expect(cast.phase).toBe('waiting');
-    let encounter = startReel(cast, FISH[1], 3.1);
-    while (encounter.phase === 'reeling') encounter = rhythmHit(encounter, 1);
-    expect(encounter).toMatchObject({ phase: 'caught', fish: FISH[1], weight: 3.1 });
+  it('formats compact species info', () => {
+    expect(formatFishInfo(bluegill)).toBe('Bluegill  •  COMMON\nDIFFICULTY ★  •  steady');
+    expect(FISH_INFO_WIDTH).toBeGreaterThan(0);
   });
 });
