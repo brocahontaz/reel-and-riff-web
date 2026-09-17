@@ -1,6 +1,12 @@
 import type { Fish } from '../content/fish';
 
-export type Phase = 'ready' | 'casting' | 'waiting' | 'reeling' | 'caught' | 'lost';
+export type Phase = 'ready' | 'casting' | 'waiting' | 'biting' | 'reeling' | 'caught' | 'lost';
+
+/** Multipliers the equipped rod applies to the reel fight. */
+export type ReelModifiers = { progressScale: number; missTensionScale: number };
+
+export const NEUTRAL_REEL: ReelModifiers = { progressScale: 1, missTensionScale: 1 };
+
 export type FishingState = {
   phase: Phase;
   castPower: number;
@@ -8,9 +14,19 @@ export type FishingState = {
   progress: number;
   combo: number;
   beats: number;
+  /** Off-beat presses and flubs during the current fight. */
+  misses: number;
+  /** Position in the current fight's rhythm pattern (see game/rhythm.ts). */
+  step: number;
   fish?: Fish;
   weight?: number;
 };
+
+const clamp01 = (value: number): number =>
+  Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+
+const settlePhase = (tension: number, progress: number): Phase =>
+  tension >= 1 ? 'lost' : progress >= 1 ? 'caught' : 'reeling';
 
 export const createFishingState = (): FishingState => ({
   phase: 'ready',
@@ -19,6 +35,8 @@ export const createFishingState = (): FishingState => ({
   progress: 0,
   combo: 0,
   beats: 0,
+  misses: 0,
+  step: 0,
 });
 
 export const beginCast = (state: FishingState): FishingState => ({
@@ -29,6 +47,8 @@ export const beginCast = (state: FishingState): FishingState => ({
   tension: 0,
   combo: 0,
   beats: 0,
+  misses: 0,
+  step: 0,
   fish: undefined,
   weight: undefined,
 });
@@ -36,35 +56,117 @@ export const beginCast = (state: FishingState): FishingState => ({
 export const finishCast = (state: FishingState, power: number): FishingState => ({
   ...state,
   phase: 'waiting',
-  castPower: Number.isFinite(power) ? Math.max(0, Math.min(1, power)) : 0,
+  castPower: clamp01(power),
 });
 
-export const startReel = (state: FishingState, fish: Fish, weight: number): FishingState => ({
+/** A fish has taken the bait — the player now has a short window to set the hook. */
+export const biteHooked = (state: FishingState, fish: Fish, weight: number): FishingState => ({
   ...state,
-  phase: 'reeling',
+  phase: 'biting',
   fish,
   weight,
   progress: 0,
   tension: 0,
   combo: 0,
   beats: 0,
+  misses: 0,
+  step: 0,
 });
 
-export const rhythmHit = (state: FishingState, accuracy: number): FishingState => {
+/** Hook set in time — the fight begins. */
+export const setHook = (state: FishingState): FishingState => {
+  if (state.phase !== 'biting' || !state.fish) return state;
+  return {
+    ...state,
+    phase: 'reeling',
+    progress: 0,
+    tension: 0,
+    combo: 0,
+    beats: 0,
+    misses: 0,
+    step: 0,
+  };
+};
+
+/** Hesitated too long — the fish spits the hook and is gone. */
+export const expireHook = (state: FishingState): FishingState => {
+  if (state.phase !== 'biting') return state;
+  return { ...state, phase: 'lost' };
+};
+
+/** Seconds the player has to set the hook; trickier fish feel faster. */
+export const hookWindow = (fish: Fish): number =>
+  Number(Math.max(0.7, Math.min(1.4, 1.2 - 0.12 * (fish.difficulty - 1))).toFixed(2));
+
+export const rhythmHit = (
+  state: FishingState,
+  accuracy: number,
+  mods: ReelModifiers = NEUTRAL_REEL,
+): FishingState => {
   if (state.phase !== 'reeling' || !state.fish) return state;
   const good = accuracy >= 0.6;
-  const progress = Math.min(1, state.progress + (good ? 0.15 : 0.025) / state.fish.difficulty);
-  const tension = Math.max(0, state.tension + (good ? 0.012 : 0.14) * state.fish.difficulty);
+  const progress = Math.min(
+    1,
+    state.progress +
+      (good ? 0.15 * Math.max(0, mods.progressScale) : 0.025) / state.fish.difficulty,
+  );
+  const tension = Math.max(
+    0,
+    state.tension +
+      (good ? 0.012 : 0.14 * Math.max(0, mods.missTensionScale)) * state.fish.difficulty,
+  );
   const combo = good ? state.combo + 1 : 0;
   const beats = state.beats + 1;
+  const misses = good ? state.misses : state.misses + 1;
   return {
     ...state,
     progress,
     tension,
     combo,
     beats,
-    phase: tension >= 1 ? 'lost' : progress >= 1 ? 'caught' : 'reeling',
+    misses,
+    step: state.step + 1,
+    phase: settlePhase(tension, progress),
+  };
+};
+
+/** Pressing before the beat: the riff stumbles, costing tension and the perfect bonus. */
+export const flub = (state: FishingState): FishingState => {
+  if (state.phase !== 'reeling' || !state.fish) return state;
+  const tension = Math.max(0, state.tension + 0.04 * state.fish.difficulty);
+  return {
+    ...state,
+    tension,
+    combo: 0,
+    misses: state.misses + 1,
+    phase: settlePhase(tension, state.progress),
   };
 };
 
 export const missBeat = (state: FishingState): FishingState => rhythmHit(state, 0);
+
+/** An open note window expired unplayed: the same bite as a sloppy beat, and the riff moves on. */
+export const missNote = (state: FishingState, mods: ReelModifiers = NEUTRAL_REEL): FishingState =>
+  rhythmHit(state, 0, mods);
+
+/** A rest window passed in silence: free, and the riff moves on. */
+export const passRest = (state: FishingState): FishingState => {
+  if (state.phase !== 'reeling') return state;
+  return { ...state, step: state.step + 1 };
+};
+
+/** Pressing during a rest stumbles the riff: pure tension, and the rest keeps its slot. */
+export const flubRest = (state: FishingState, mods: ReelModifiers = NEUTRAL_REEL): FishingState => {
+  if (state.phase !== 'reeling' || !state.fish) return state;
+  const tension = Math.max(
+    0,
+    state.tension + 0.1 * state.fish.difficulty * Math.max(0, mods.missTensionScale),
+  );
+  return {
+    ...state,
+    tension,
+    combo: 0,
+    misses: state.misses + 1,
+    phase: settlePhase(tension, state.progress),
+  };
+};
