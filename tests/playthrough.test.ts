@@ -7,11 +7,14 @@ import {
   expireHook,
   finishCast,
   hookWindow,
+  missNote,
+  passRest,
   rhythmHit,
   setHook,
 } from '../src/game/fishing';
 import { biteDelay, pickFish, rollWeight } from '../src/game/encounter';
 import { createRng } from '../src/game/rng';
+import { fightModifiers, stepAt } from '../src/game/rhythm';
 import { catchReward } from '../src/game/rewards';
 import { lureById, rodById, rodModifiers, sanitizePlayer } from '../src/game/tackle';
 import {
@@ -188,5 +191,35 @@ describe('full playthrough', () => {
     expect(fresh.lure).toBe('bare');
     expect(fresh.coins).toBe(0);
     expect(fresh.catches).toBe(0);
+  });
+
+  it('walks each species riff, and idle fights always terminate', () => {
+    const koi = FISH[2]; // tricky: playable notes mixed with silent rests
+    const mods = fightModifiers(rodById('hickory'), koi);
+
+    // Drive the fight exactly the way the scene does: every open window
+    // resolves — notes are played well, rests are held in silence.
+    let state = setHook(biteHooked(createFishingState(), koi, 6));
+    let cycles = 0;
+    while (state.phase === 'reeling') {
+      const step = stepAt(koi, state.step);
+      state = step === 'rest' ? passRest(state) : rhythmHit(state, 0.9, mods);
+      cycles += 1;
+      expect(cycles).toBeLessThan(200);
+    }
+    expect(state.phase).toBe('caught');
+    expect(state.misses).toBe(0);
+
+    // An idle fight where every note expires unplayed still ends: tension
+    // accumulates until the line snaps, so a fight can never stall.
+    let idle = setHook(biteHooked(createFishingState(), koi, 6));
+    cycles = 0;
+    while (idle.phase === 'reeling') {
+      const step = stepAt(koi, idle.step);
+      idle = step === 'rest' ? passRest(idle) : missNote(idle);
+      cycles += 1;
+      expect(cycles).toBeLessThan(200);
+    }
+    expect(idle.phase).toBe('lost');
   });
 });

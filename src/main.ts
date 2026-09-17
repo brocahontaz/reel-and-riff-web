@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { playCoins, playOutcome, playRiff } from './audio/riffAudio';
+import { playBeat, playCoins, playOutcome, playRiff } from './audio/riffAudio';
 import { FISH } from './content/fish';
 import { MOONLIT_COVE } from './content/location';
 import { advanceBeat, consumeBeat, createBeatClock, type BeatClock } from './game/beat';
@@ -10,15 +10,27 @@ import {
   expireHook,
   finishCast,
   flub,
+  flubRest,
   hookWindow,
+  missNote,
+  passRest,
   rhythmHit,
   setHook,
   type FishingState,
+  type ReelModifiers,
 } from './game/fishing';
+import {
+  baseInterval,
+  fightModifiers,
+  isPlayable,
+  patternGlyphs,
+  stepAt,
+  stepInterval,
+} from './game/rhythm';
 import { biteDelay, pickFish, rollWeight } from './game/encounter';
 import { createRng } from './game/rng';
 import { catchReward } from './game/rewards';
-import { lureById, rodById, rodModifiers, sanitizePlayer } from './game/tackle';
+import { lureById, rodById, sanitizePlayer } from './game/tackle';
 import { bindFishingAction, bindPanelKeys } from './input/keyboard';
 import { loadPlayer, saveCatch, savePlayer, type PlayerState } from './persistence/playerStorage';
 import {
@@ -45,6 +57,8 @@ class LakeScene extends Phaser.Scene {
   private biteClock = 0;
   private hookClock = 0;
   private beatClock: BeatClock = createBeatClock();
+  private windowKind: 'note' | 'rest' | undefined;
+  private windowConsumed = false;
   private castDir = 1;
   private lostReason: 'snap' | 'spat' = 'snap';
   private overlay: Overlay = 'none';
@@ -104,21 +118,54 @@ class LakeScene extends Phaser.Scene {
       }
     }
     if (this.state.phase === 'reeling') {
-      const interval = this.beatInterval();
+      const fish = this.state.fish!;
       const wasReady = this.beatClock.ready;
-      this.beatClock = advanceBeat(this.beatClock, seconds, interval);
+      this.beatClock = advanceBeat(this.beatClock, seconds, baseInterval(fish));
+      let fired = false;
       if (this.beatClock.ready && !wasReady) {
-        this.set('beat', '♪  PLAY THE BEAT  ♪');
-        this.tweens.add({ targets: this.fish, scale: 1.15, duration: 120, yoyo: true });
+        fired = true;
+        this.windowConsumed = false;
+        const step = stepAt(fish, this.state.step);
+        this.windowKind = isPlayable(step) ? 'note' : 'rest';
+        if (this.windowKind === 'rest') {
+          this.set('beat', '·  REST — HOLD!');
+        } else {
+          this.set('beat', step === 'burst' ? '♪!  SPEED UP!' : '♪  PLAY!');
+          this.tweens.add({
+            targets: this.fish,
+            scale: 1.15,
+            duration: step === 'burst' ? 80 : 120,
+            yoyo: true,
+          });
+        }
+        playBeat(step);
       }
+      if (!fired && wasReady && !this.beatClock.ready && !this.windowConsumed) {
+        if (this.windowKind === 'rest') {
+          this.state = passRest(this.state);
+          this.set('beat', '·');
+        } else {
+          this.state = missNote(this.state, this.fightMods());
+          this.set('beat', '♪  MISSED!');
+          playRiff(false, 0);
+        }
+        this.beatClock = consumeBeat(this.beatClock, stepInterval(fish, this.state.step));
+        this.windowKind = undefined;
+        this.finishIfNeeded();
+      }
+      const filled = Math.round(this.state.progress * 14);
+      const bar = '▰'.repeat(filled) + '▱'.repeat(14 - filled);
       this.set(
         'meter',
-        `REEL  ${'▰'.repeat(Math.round(this.state.progress * 14))}${'▱'.repeat(14 - Math.round(this.state.progress * 14))}   TENSION ${Math.round(this.state.tension * 100)}%`,
+        `REEL  ${bar}   TENSION ${Math.round(this.state.tension * 100)}%  NEXT ${patternGlyphs(
+          fish,
+          this.state.step,
+        )}`,
       );
     }
   }
-  private beatInterval(): number {
-    return Math.max(0.65, 1.15 - (this.state.fish?.difficulty ?? 1) * 0.12);
+  private fightMods(): ReelModifiers {
+    return fightModifiers(rodById(this.player.rod), this.state.fish!);
   }
   private action() {
     if (this.overlay !== 'none') return;
@@ -153,6 +200,9 @@ class LakeScene extends Phaser.Scene {
     }
     if (this.state.phase === 'biting') {
       this.state = setHook(this.state);
+      this.windowKind = undefined;
+      this.windowConsumed = false;
+      this.beatClock = consumeBeat(this.beatClock, stepInterval(this.state.fish!, 0) + 0.35);
       playRiff(true, 0);
       this.set('status', `${this.state.fish!.name} hooked! SPACE on the pulse to reel it in.`);
       this.set('beat', '');
@@ -160,6 +210,7 @@ class LakeScene extends Phaser.Scene {
       return;
     }
     if (this.state.phase === 'reeling') {
+      const fish = this.state.fish!;
       if (!this.beatClock.ready) {
         this.state = flub(this.state);
         this.set('beat', '♭ TOO EARLY...');
@@ -167,9 +218,17 @@ class LakeScene extends Phaser.Scene {
         this.finishIfNeeded();
         return;
       }
+      this.windowConsumed = true;
+      if (this.windowKind === 'rest') {
+        this.state = flubRest(this.state, this.fightMods());
+        this.set('beat', '♭ REST! HOLD...');
+        playRiff(false, 0);
+        this.finishIfNeeded();
+        return;
+      }
       const accuracy = Math.min(1, this.beatClock.remaining / 0.6);
-      this.state = rhythmHit(this.state, accuracy, rodModifiers(rodById(this.player.rod)));
-      this.beatClock = consumeBeat(this.beatClock, this.beatInterval());
+      this.state = rhythmHit(this.state, accuracy, this.fightMods());
+      this.beatClock = consumeBeat(this.beatClock, stepInterval(fish, this.state.step));
       playRiff(accuracy >= 0.6, this.state.combo);
       this.set('beat', accuracy >= 0.6 ? '✦ NICE RIFF! ✦' : '♭ OFF BEAT...');
       this.finishIfNeeded();

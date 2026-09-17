@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { playCoins, playOutcome, playRiff, resumeAudio } from '../src/audio/riffAudio';
+import { playBeat, playCoins, playOutcome, playRiff, resumeAudio } from '../src/audio/riffAudio';
 
 describe('riff audio boundary', () => {
   it('does not leak a rejected browser resume promise', async () => {
@@ -12,9 +12,12 @@ describe('riff audio boundary', () => {
   it('is safe when Web Audio is unavailable', () => {
     expect(() => playRiff(true)).not.toThrow();
     expect(() => playCoins()).not.toThrow();
+    expect(() => playBeat('note')).not.toThrow();
+    expect(() => playBeat('burst')).not.toThrow();
+    expect(() => playBeat('rest')).not.toThrow();
   });
 
-  it('schedules combo riffs, coins and outcomes in order', () => {
+  it('schedules combo riffs, coins, outcomes and pulse ticks in order', () => {
     const oscillators: Array<{ frequency: { value: number } }> = [];
     const fakeContext = {
       currentTime: 0,
@@ -46,6 +49,9 @@ describe('riff audio boundary', () => {
     playCoins(); // two-note coin sparkle
     playOutcome(true); // three-note catch jingle
     playRiff(true, 50); // combo pitch is capped
+    playBeat('note'); // one pulse tick per reeling beat kind
+    playBeat('burst');
+    playBeat('rest');
 
     const comboRoot = 392 * Math.pow(2, 2 / 12);
     const cappedRoot = 392 * Math.pow(2, 8 / 12);
@@ -60,6 +66,9 @@ describe('riff audio boundary', () => {
       587,
       cappedRoot,
       cappedRoot * 1.3346,
+      523,
+      659,
+      196,
     ]);
     vi.unstubAllGlobals();
   });

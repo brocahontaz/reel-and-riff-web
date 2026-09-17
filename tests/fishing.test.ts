@@ -7,8 +7,11 @@ import {
   expireHook,
   finishCast,
   flub,
+  flubRest,
   hookWindow,
   missBeat,
+  missNote,
+  passRest,
   rhythmHit,
   setHook,
 } from '../src/game/fishing';
@@ -20,7 +23,9 @@ const koi = FISH[2];
 
 describe('cast and wait', () => {
   it('starts ready to cast', () => {
-    expect(createFishingState().phase).toBe('ready');
+    const fresh = createFishingState();
+    expect(fresh.phase).toBe('ready');
+    expect(fresh.step).toBe(0);
   });
 
   it('clamps cast power between 0 and 1', () => {
@@ -45,6 +50,7 @@ describe('the hook moment', () => {
     expect(hooked.tension).toBe(0);
     expect(hooked.misses).toBe(0);
     expect(hooked.combo).toBe(0);
+    expect(hooked.step).toBe(0);
   });
 
   it('loses the fish when the hook window expires', () => {
@@ -110,11 +116,80 @@ describe('the reel fight', () => {
     expect(sloppySoft).toBeLessThan(sloppyBase);
   });
 
+  it('advances the rhythm step on every resolved beat', () => {
+    const state = reeling();
+    expect(state.step).toBe(0);
+    expect(rhythmHit(state, 0.9).step).toBe(1);
+    expect(rhythmHit(rhythmHit(state, 0.9), 0.2).step).toBe(2);
+  });
+
+  it('misses an expired note like a sloppy beat and moves the riff on', () => {
+    const state = reeling();
+    const missed = missNote(state);
+    expect(missed.tension).toBeGreaterThan(rhythmHit(state, 0.9).tension);
+    expect(missed.combo).toBe(0);
+    expect(missed.misses).toBe(1);
+    expect(missed.beats).toBe(1);
+    expect(missed.progress).toBeGreaterThan(0);
+    expect(missed.step).toBe(1);
+    const idle = createFishingState();
+    expect(missNote(idle)).toBe(idle);
+  });
+
+  it('softens expired-note tension with rod modifiers', () => {
+    const base = missNote(reeling()).tension;
+    const soft = missNote(reeling(), { progressScale: 3, missTensionScale: 0.6 }).tension;
+    expect(soft).toBeLessThan(base);
+    expect(soft).toBeCloseTo(base * 0.6, 12);
+  });
+
+  it('passes rests in silence without penalty', () => {
+    const state = reeling(koi);
+    const passed = passRest(state);
+    expect(passed.step).toBe(state.step + 1);
+    expect(passed.tension).toBe(state.tension);
+    expect(passed.combo).toBe(state.combo);
+    expect(passed.misses).toBe(state.misses);
+    expect(passed.beats).toBe(state.beats);
+    expect(passed.progress).toBe(state.progress);
+    expect(passed.phase).toBe('reeling');
+    const idle = createFishingState();
+    expect(passRest(idle)).toBe(idle);
+  });
+
+  it('punishes pressing during a rest without advancing the riff', () => {
+    const state = reeling(koi);
+    const flubbed = flubRest(state);
+    expect(flubbed.tension).toBeGreaterThan(state.tension);
+    expect(flubbed.combo).toBe(0);
+    expect(flubbed.misses).toBe(1);
+    expect(flubbed.progress).toBe(state.progress);
+    expect(flubbed.beats).toBe(state.beats);
+    expect(flubbed.step).toBe(state.step);
+    const soft = flubRest(state, { progressScale: 1, missTensionScale: 0.6 });
+    expect(soft.tension).toBeLessThan(flubbed.tension);
+    const idle = createFishingState();
+    expect(flubRest(idle)).toBe(idle);
+  });
+
+  it('snaps the line when rest mashing maxes tension', () => {
+    let state = reeling(koi);
+    for (let presses = 0; state.phase === 'reeling'; presses += 1) {
+      state = flubRest(state);
+      expect(presses).toBeLessThan(50);
+    }
+    expect(state.phase).toBe('lost');
+    expect(state.step).toBe(0);
+  });
+
   it('ignores beats outside the fight', () => {
     const idle = createFishingState();
     expect(rhythmHit(idle, 0.9)).toBe(idle);
     expect(missBeat(idle)).toBe(idle);
+    expect(missNote(idle)).toBe(idle);
     expect(flub(idle)).toBe(idle);
+    expect(passRest(idle)).toBe(idle);
+    expect(flubRest(idle)).toBe(idle);
   });
 
   it('resets the fight on a new cast', () => {
@@ -122,6 +197,7 @@ describe('the reel fight', () => {
     const fresh = beginCast(dirty);
     expect(fresh.phase).toBe('casting');
     expect(fresh.misses).toBe(0);
+    expect(fresh.step).toBe(0);
     expect(fresh.fish).toBeUndefined();
   });
 });
@@ -137,7 +213,10 @@ describe('fishing presentation', () => {
   });
 
   it('formats compact species info', () => {
-    expect(formatFishInfo(bluegill)).toBe('Bluegill  •  COMMON\nDIFFICULTY ★  •  steady');
+    expect(formatFishInfo(bluegill)).toBe('Bluegill  •  COMMON\nDIFFICULTY ★  •  steady pulse');
+    expect(formatFishInfo(koi)).toBe(
+      'Golden Koi  •  RARE\nDIFFICULTY ★★★  •  silent rests — hold on the ·',
+    );
     expect(FISH_INFO_WIDTH).toBeGreaterThan(0);
   });
 });

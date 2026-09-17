@@ -21,8 +21,11 @@ buy rods and lures that reach deeper water and rarer fish.
 1. **Cast** — Space starts the power meter; a deeper cast reaches rarer water.
 2. **Wait** — press Space too early and the ripples scare the fish away.
 3. **Hook** — when something bites you have a beat or two to set the hook.
-4. **Riff** — press Space on the pulse. On-beat presses climb a melody and
-   reel the fish in; sloppy ones raise tension until the line snaps.
+4. **Riff** — press Space on the pulse. Every species plays its own riff:
+   steady fish keep a constant pulse, darting fish throw sudden speed bursts
+   (♪!) and tricky fish drop silent rests (·) you must not play. On-beat
+   presses climb a melody and reel the fish in; missing a beat raises tension
+   until the line snaps.
 5. **Reward** — coins scale with species value, landed weight, a perfect riff
    and a first-time species discovery bonus.
 6. **Upgrade** — press **S** to spend coins on rods (faster reels, softer
@@ -46,12 +49,28 @@ The prototype is intentionally asset-free: Phaser draws the lake, fish and
 feedback using generated shapes and text so gameplay can be iterated before
 art production.
 
+## CI/CD
+
+GitHub Actions runs lint, format check, typecheck, tests and the production
+build on every pull request and push to `main`. Pushes to `main` and `v*`
+version tags publish the site image to `ghcr.io/brocahontaz/reel-and-riff-web`
+([packages](https://github.com/brocahontaz?tab=packages)).
+
+Local smoke test:
+
+```bash
+docker build -t reel-and-riff-web .
+docker run --rm -p 8080:80 reel-and-riff-web
+# open http://localhost:8080
+```
+
 ## Structure
 
 - `src/main.ts` — Phaser scene, input and presentation
 - `src/audio/riffAudio.ts` — Web Audio riffs, coin chimes and outcome jingles
 - `src/game/fishing.ts` — deterministic fishing, hook and rhythm rules
 - `src/game/beat.ts` — the reeling pulse clock
+- `src/game/rhythm.ts` — per-species rhythm patterns, step timing and fight modifiers
 - `src/game/encounter.ts` — depth-weighted fish encounters and bite timing
 - `src/game/rewards.ts` — catch coin values and bonuses
 - `src/game/tackle.ts` — shop purchase/equip rules and gear sanitising

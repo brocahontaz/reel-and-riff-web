@@ -66,3 +66,14 @@ export const playOutcome = (caught: boolean) => {
   const notes = caught ? [392, 494, 587] : [247, 196];
   notes.forEach((frequency, index) => note(frequency, start + index * 0.12, 0.2, 0.05));
 };
+
+/** A short pulse tick for each reeling beat: bright for notes, sharper for bursts, low for rests. */
+export const playBeat = (step: 'note' | 'burst' | 'rest') => {
+  const audio = getContext();
+  if (!audio) return;
+  resumeAudio(audio);
+  const start = audio.currentTime;
+  if (step === 'note') note(523, start, 0.05, 0.03);
+  else if (step === 'burst') note(659, start, 0.05, 0.035);
+  else note(196, start, 0.07, 0.02);
+};
