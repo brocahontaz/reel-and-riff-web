@@ -21,14 +21,25 @@ cabin, a dark little venue and a handful of people. Walk the paths and press
 1. **Talk** — Old Marlin by the dock and June by the hall share tips and lore.
 2. **Fish** — the original loop, now a focused scene at the dock: cast with
    **Space**, wait for the bite, hook it, then keep pressing on the pulse to
-   play a riff and reel in your catch. Coins scale with species, weight and a
-   perfect riff.
+   play a riff and reel in your catch.
 3. **Upgrade** — press **S** for the tackle shop (rods and lures) and **C** for
    the species journal while fishing.
 4. **Practice** — enter your cabin and step on the guitar mat: a rhythm
    minigame over three short songs, graded gold, silver or bronze.
 5. **Persist** — coins, gear, journal and best catch survive page reloads via
    browser storage.
+
+## Fishing loop
+
+1. **Cast** — Space starts the power meter; a deeper cast reaches rarer water.
+2. **Wait** — press too early and the ripples scare the fish away.
+3. **Hook** — when something bites you have a beat or two to set the hook.
+4. **Riff** — press on the pulse. Every species plays its own riff: steady fish
+   keep a constant pulse, darting fish throw sudden speed bursts (♪!) and
+   tricky fish drop silent rests (·) you must not play.
+5. **Reward** — coins scale with species value, landed weight, a perfect riff
+   and a first-time species discovery bonus.
+6. **Upgrade** — rods improve reel control, lures improve fish selection.
 
 ## Controls
 
@@ -109,6 +120,7 @@ docker run --rm -p 8080:80 reel-and-riff-web
 - `src/content/fishingSpots.ts` — registry of fishable spots
 - `src/content/fish.ts` — data-driven fish definitions
 - `src/content/tackle.ts` — data-driven rods and lures
+- `src/content/location.ts` — first location and control prompt
 - `src/input/keys.ts` — raw key codes and pure input mapping
 - `src/input/keyboard.ts` — keyboard bindings for fishing and panels
 - `src/ui/dialogue.ts` — pure dialogue state and word wrap
